@@ -156,12 +156,21 @@ int main()
 
             MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"a",1);
 
+            /*
+             * Re-initialize the system controller services state machine before
+             * starting the requested ISP operation.
+             *
+             * NOTE: Do NOT globally disable interrupts here. The PROGRAM (and
+             * AUTHENTICATE/VERIFY) operations are driven by the COMM_BLK
+             * interrupt (ComBlk_IRQHandler), which repeatedly invokes
+             * page_read_handler() to stream the bitstream to the system
+             * controller. Disabling interrupts would stall the paged transfer
+             * and hang the operation.
+             */
+            MSS_SYS_init(MSS_SYS_NO_EVENT_HANDLER);
+
             switch(g_mode)
             {
-                __disable_irq();
-
-                MSS_SYS_init(MSS_SYS_NO_EVENT_HANDLER);
-
                 case '0':
                     MSS_SYS_start_isp(MSS_SYS_PROG_AUTHENTICATE,
                                       page_read_handler,
@@ -180,8 +189,8 @@ int main()
                                       isp_completion_handler);
                     break;
 
-
-                __enable_irq();
+                default:
+                    break;
             }
       }
       isp_host_reset_state();
@@ -221,7 +230,7 @@ static uint32_t read_page_from_host_through_uart
     uint32_t length
 )
 {
-    uint32_t num_bytes,factor,temp;
+    uint32_t num_bytes,temp;
 
     num_bytes = length;
     char crc;
@@ -273,12 +282,19 @@ static uint32_t read_page_from_host_through_uart
     //Recive 1-byte CRC for data of size num_bytes
     while(!(UART_Polled_Rx ( gp_my_uart, rx_buff, 1 )))
                 ;
-    factor = 1;
+    /*
+     * Compute the checksum over the ENTIRE received page (XOR of all
+     * num_bytes). The previous implementation only XOR'd strided byte
+     * indices (1, 2, 4, 8, ...), so it did not actually validate the whole
+     * page and corrupted pages could pass the check.
+     */
     crc = 0;
-    while((num_bytes-1)/factor)
     {
-      crc = crc^g_buffer[factor];
-      factor = factor*2;
+        uint32_t crc_idx;
+        for (crc_idx = 0u; crc_idx < num_bytes; crc_idx++)
+        {
+            crc = crc ^ g_buffer[crc_idx];
+        }
     }
     if(crc == (char)rx_buff[0])
     {
