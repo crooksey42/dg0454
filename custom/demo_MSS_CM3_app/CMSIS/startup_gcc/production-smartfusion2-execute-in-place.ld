@@ -1,253 +1,263 @@
 /*******************************************************************************
- * SmartFusion2 M2S010 application linker script (ISP-safe isolation model)
+ * (c) Copyright 2015 Microsemi SoC Products Group.  All rights reserved.
  *
- * Goals:
- *  - Vector table fixed in ROM (no RAM vector relocation)
- *  - ISP/program-service SRAM window strictly reserved and never touched by app
- *  - Strong linker ASSERTs for overlap/overflow detection
- *  - Explicit symbols for crt0 copy/zero loops (app sections only)
- ******************************************************************************/
-
+ * file name : production-smartfusion2-execute-in-place.ld
+ * SmartFusion2 Cortex-M3 linker script.
+ *
+ * MODIFIED FOR ISP DEMO (run-from-eSRAM):
+ *   The application image is LOADED into eNVM (LMA at 0x00000000, so Libero
+ *   accepts it into the eNVM data client and FlashPro/the bootloader can store
+ *   it), but it RUNS from eSRAM (VMA at 0x20000000).
+ *
+ *   This is achieved with the "AT>rom" load-vs-run mechanism: .vector_table,
+ *   .text and .data have their run-time addresses (VMA) in eSRAM and their
+ *   load addresses (LMA) in eNVM. The C startup code copies .data from its LMA
+ *   to its VMA and zero-inits .bss, exactly as for a normal "run from RAM"
+ *   image.
+ *
+ *   WHY: Previously every section was placed at ORIGIN 0x00000000 (VMA == LMA),
+ *   so the running image only worked because the boot loader remapped eSRAM to
+ *   0x00000000. During an IAP/ISP PROGRAM operation the System Controller
+ *   changes the eNVM/eSRAM remap state, which moved the ground under the
+ *   0x0-based stack/data/code and corrupted the running application (garbage
+ *   bytes on the UART, lock-up). AUTHENTICATE/VERIFY do not reprogram eNVM, so
+ *   they never disturbed the remap and worked. Linking the run-time addresses
+ *   natively at 0x20000000 removes that dependency so PROGRAM no longer
+ *   corrupts the running code.
+ *
+ *   REQUIRED COMPANION CHANGES:
+ *     - The boot loader must set SCB->VTOR = 0x20000000 and branch to the
+ *       application reset handler at its 0x20000000 address; it must NOT rely
+ *       on remapping eSRAM to 0x00000000 for the application to run.
+ *     - Regenerate the eNVM .hex from this build and store it at the eNVM
+ *       image address used by the boot loader.
+ *
+ * SVN $Revision: 7683 $
+ * SVN $Date: 2015-08-21 17:06:30 +0100 (Fri, 21 Aug 2015) $
+ */
 OUTPUT_FORMAT("elf32-littlearm", "elf32-bigarm", "elf32-littlearm")
+GROUP(-lc -lgcc -lm)
 OUTPUT_ARCH(arm)
 ENTRY(Reset_Handler)
-GROUP(-lc -lgcc -lm)
 SEARCH_DIR(.)
-__DYNAMIC = 0;
+__DYNAMIC  =  0;
 
-/*==============================================================================
- * MEMORY MAP
- *  - rom      : non-volatile image storage
- *  - isp_ram  : MSS_SYS / ISP exclusive scratch+runtime (NO app placement)
- *  - app_ram  : application runtime RAM only
- *============================================================================*/
+/*******************************************************************************
+ * Start of board customization.
+ *******************************************************************************/
 MEMORY
 {
-    rom      (rx)  : ORIGIN = 0x00000000, LENGTH = 256K
-    isp_ram  (rwx) : ORIGIN = 0x20000000, LENGTH = 16K
-    app_ram  (rwx) : ORIGIN = 0x20004000, LENGTH = 40K
+    /*
+    * WARNING: The words "SOFTCONSOLE", "FLASH", and "USE", the colon ":", and
+    *          the name of the type of flash memory are all in a specific order.
+    *          Please do not modify that comment line, in order to ensure
+    *          debugging of your application will use the flash memory correctly.
+    */
+
+    /* SOFTCONSOLE FLASH USE: microsemi-smartfusion2-envm */
+    /* LMA: image is stored/loaded here. eNVM is mapped at 0x00000000 on reset,
+     * so linking the load image at 0x00000000 keeps it acceptable to Libero's
+     * eNVM data client. */
+    rom (rx)  : ORIGIN = 0x00000000, LENGTH = 60k
+
+    /* VMA: image actually executes here after the boot loader copies it into
+     * eSRAM. All run-time addresses (code, data, bss, stack, isp_buffer) are
+     * resolved natively to this region, so they do not depend on the
+     * eSRAM->0x00000000 remap. */
+    ram (rwx) : ORIGIN = 0x20000000, LENGTH = 60k
 }
 
-/*==============================================================================
- * CONFIG
- *============================================================================*/
-MIN_SIZE_HEAP = 2K;
-STACK_SIZE    = 8K;
+RAM_START_ADDRESS   = 0x20000000;   /* Must match MEMORY region ram ORIGIN above (run-time). */
+RAM_SIZE            = 60k;           /* Must match MEMORY region ram LENGTH above. */
+MAIN_STACK_SIZE     = 8k;            /* Cortex main stack size. */
+MIN_SIZE_HEAP       = 0k;           /* needs to be calculated for your application */
 
-/* Top of application stack (only in app_ram) */
-_estack = ORIGIN(app_ram) + LENGTH(app_ram);
+/*******************************************************************************
+ * End of board customization.
+ *******************************************************************************/
 
-/*==============================================================================
- * SECTIONS
- *============================================================================*/
+PROVIDE (__main_stack_start = RAM_START_ADDRESS + RAM_SIZE);
+PROVIDE (__process_stack_start = __main_stack_start - MAIN_STACK_SIZE);
+PROVIDE (_estack = __main_stack_start);
+PROVIDE (__mirrored_nvm = 0);   /* NVM is not mirrored to VMA address; .data copy is required. */
+
+/*
+ * Remap instruction for startup code and debugger:
+ *  0: remap eNVM to address 0x00000000
+ *  1: remap eSRAM to address 0x00000000
+ *  2: remap external DDR memory to address 0x00000000
+ *
+ * NOTE: With the application now linked to run natively at 0x20000000, the
+ * application no longer depends on this remap. The reset/vector base is set via
+ * VTOR by the boot loader. Left at 0 here.
+ */
+PROVIDE (__smartfusion2_memory_remap = 0);
+
 SECTIONS
 {
-    /*--------------------------------------------------------------------------
-     * Vector table FIXED in ROM
-     *--------------------------------------------------------------------------
-     * Keep vectors in ROM so program mode cannot corrupt active vectors in SRAM.
-     */
-    .isr_vector : ALIGN(8)
-    {
-        __vector_table_start__ = .;
-        KEEP(*(.isr_vector))
-        . = ALIGN(8);
-        __vector_table_end__ = .;
-    } > rom
+  .vector_table : ALIGN(0x10)
+  {
+    __vector_table_load = LOADADDR(.vector_table);
+    __vector_table_start = .;
+    __vector_table_vma_base_address = .;
+    KEEP(*(.isr_vector))
+    . = ALIGN(0x10);
+    _evector_table = .;
+  } >ram AT>rom
 
-    /* Alias often expected by startup code */
-    PROVIDE(__Vectors = __vector_table_start__);
-    PROVIDE(__Vectors_End = __vector_table_end__);
-    PROVIDE(__Vectors_Size = __vector_table_end__ - __vector_table_start__);
+  .boot_code : ALIGN(0x10) /* When all code in NVRAM, no requirement for this section- but adds clarity when looking at .lst file */
+  {
+    *(.boot_code)
+    . = ALIGN(0x10);
+  } >ram AT>rom
 
-    /*--------------------------------------------------------------------------
-     * Code + read-only data in ROM
-     *--------------------------------------------------------------------------*/
-    .text : ALIGN(8)
-    {
-        __text_start__ = .;
-        CREATE_OBJECT_SYMBOLS
-        *(.text .text.* .gnu.linkonce.t.*)
-        KEEP(*(.init))
-        KEEP(*(.fini))
-        . = ALIGN(8);
-        __text_end__ = .;
-    } > rom
+  .text : ALIGN(0x10)
+  {
+    CREATE_OBJECT_SYMBOLS
+    __text_load = LOADADDR(.text);
+    __text_start = .;
 
-    .rodata : ALIGN(8)
-    {
-        __rodata_start__ = .;
-        *(.rodata .rodata.* .gnu.linkonce.r.*)
-        . = ALIGN(8);
-        __rodata_end__ = .;
-    } > rom
+    *(.text .text.* .gnu.linkonce.t.*)
+    *(.plt)
+    *(.gnu.warning)
+    *(.glue_7t) *(.glue_7) *(.vfp11_veneer)
 
-    /* Exception tables (if used by toolchain/libgcc) */
-    .ARM.extab : ALIGN(8)
-    {
-        *(.ARM.extab* .gnu.linkonce.armextab.*)
-        . = ALIGN(8);
-    } > rom
+    . = ALIGN(0x4);
+    /* These are for running static constructors and destructors under ELF.  */
+    KEEP (*crtbegin.o(.ctors))
+    KEEP (*(EXCLUDE_FILE (*crtend.o) .ctors))
+    KEEP (*(SORT(.ctors.*)))
+    KEEP (*crtend.o(.ctors))
+    KEEP (*crtbegin.o(.dtors))
+    KEEP (*(EXCLUDE_FILE (*crtend.o) .dtors))
+    KEEP (*(SORT(.dtors.*)))
+    KEEP (*crtend.o(.dtors))
 
-    .ARM.exidx : ALIGN(8)
-    {
-        __exidx_start = .;
-        *(.ARM.exidx* .gnu.linkonce.armexidx.*)
-        __exidx_end = .;
-        . = ALIGN(8);
-    } > rom
+    *(.rodata .rodata.* .gnu.linkonce.r.*)
 
-    /*--------------------------------------------------------------------------
-     * Initialized data in APP RAM, loaded from ROM
-     *--------------------------------------------------------------------------*/
-    .data : ALIGN(8)
-    {
-        __data_start__ = .;
-        *(.data .data.* .gnu.linkonce.d.*)
-        . = ALIGN(8);
-        __data_end__ = .;
-    } > app_ram AT> rom
+    *(.ARM.extab* .gnu.linkonce.armextab.*)
+    *(.gcc_except_table)
+    *(.eh_frame_hdr)
+    *(.eh_frame)
 
-    /* crt0 copy symbols */
-    __data_load__ = LOADADDR(.data);
-    __data_size__ = SIZEOF(.data);
+    KEEP (*(.vector_table))
+    KEEP (*(.init))
+    KEEP (*(.fini))
 
-    /*--------------------------------------------------------------------------
-     * Zero-init in APP RAM only
-     *--------------------------------------------------------------------------*/
-    .bss (NOLOAD) : ALIGN(8)
-    {
-        __bss_start__ = .;
-        *(.bss .bss.* .gnu.linkonce.b.*)
-        *(COMMON)
-        . = ALIGN(8);
-        __bss_end__ = .;
-    } > app_ram
+    PROVIDE_HIDDEN (__preinit_array_start = .);
+    KEEP (*(.preinit_array))
+    PROVIDE_HIDDEN (__preinit_array_end = .);
+    PROVIDE_HIDDEN (__init_array_start = .);
+    KEEP (*(SORT(.init_array.*)))
+    KEEP (*(.init_array))
+    PROVIDE_HIDDEN (__init_array_end = .);
+    PROVIDE_HIDDEN (__fini_array_start = .);
+    KEEP (*(.fini_array))
+    KEEP (*(SORT(.fini_array.*)))
+    PROVIDE_HIDDEN (__fini_array_end = .);
+    . = ALIGN(0x10);
+  } >ram AT>rom
+  /* .ARM.exidx is sorted, so has to go in its own output section.  */
+   __exidx_start = .;
+  .ARM.exidx :
+  {
+    *(.ARM.exidx* .gnu.linkonce.armexidx.*)
+  } >ram AT>rom
+  __exidx_end = .;
+  _etext = .;
 
-    __bss_size__ = SIZEOF(.bss);
+  .data : ALIGN(0x10)
+  {
+    __data_load = LOADADDR(.data);
+    _sidata = LOADADDR (.data);
+    __data_start = .;
+    _sdata = .;
+    KEEP(*(.jcr))
+    *(.got.plt) *(.got)
+    *(.shdata)
+    *(.data .data.* .gnu.linkonce.d.*)
+    . = ALIGN(0x10);
+    _edata = .;
+  } >ram AT>rom
 
-    /*--------------------------------------------------------------------------
-     * Optional no-init app variables (retain across soft reset)
-     *--------------------------------------------------------------------------*/
-    .noinit (NOLOAD) : ALIGN(8)
-    {
-        __noinit_start__ = .;
-        *(.noinit .noinit.*)
-        . = ALIGN(8);
-        __noinit_end__ = .;
-    } > app_ram
+  .bss : ALIGN(0x10)
+  {
+    __bss_start__ = . ;
+    _sbss = .;
+    *(.shbss)
+    *(.bss .bss.* .gnu.linkonce.b.*)
+    *(COMMON)
+    . = ALIGN(0x10);
+    __bss_end__ = .;
+    _end = .;
+    __end = _end;
+    _ebss = .;
+    PROVIDE(end = .);
+  } >ram
 
-    /*--------------------------------------------------------------------------
-     * Heap in APP RAM
-     *--------------------------------------------------------------------------*/
-    .heap (NOLOAD) : ALIGN(8)
-    {
-        __heap_start__ = .;
-        . += MIN_SIZE_HEAP;
-        . = ALIGN(8);
-        __heap_end__ = .;
-    } > app_ram
+  /*
+   * ISP page buffers (g_page_buffer, isp_page_buffer) are tagged
+   * .isp_buffer in the application source. Give them a defined home inside
+   * eSRAM. This is run-time only (not part of the loaded eNVM image).
+   */
+  .isp_buffer : ALIGN(0x10)
+  {
+    __isp_buffer_start__ = .;
+    KEEP(*(.isp_buffer .isp_buffer.*))
+    . = ALIGN(0x10);
+    __isp_buffer_end__ = .;
+  } >ram
 
-    /*--------------------------------------------------------------------------
-     * Stack in APP RAM (top-down, fixed)
-     *--------------------------------------------------------------------------*/
-    .stack (NOLOAD) :
-    {
-        __stack_top__ = ORIGIN(app_ram) + LENGTH(app_ram);
-        __stack_bottom__ = __stack_top__ - STACK_SIZE;
-        . = __stack_bottom__;
-        . = ALIGN(8);
-        __stack_start__ = .;
-        . = __stack_top__;
-        __stack_end__ = .;
-    } > app_ram
+  .heap : ALIGN(0x10)
+  {
+    __heap_start__ = .;
+    . += MIN_SIZE_HEAP;         /* will generate error if this minimum size not available */
+    . += ((ABSOLUTE(RAM_START_ADDRESS) + RAM_SIZE - MAIN_STACK_SIZE) - .); /* assumes stack starts after heap */
+    _eheap = .;
+  } >ram
 
-    /* Legacy aliases some startup/newlib ports expect */
-    PROVIDE(_stack = __stack_top__);
-    PROVIDE(_stack_top = __stack_top__);
-    PROVIDE(_stack_bottom = __stack_bottom__);
-    PROVIDE(__StackTop = __stack_top__);
-    PROVIDE(__StackLimit = __stack_bottom__);
+  .stack : ALIGN(0x10)
+  {
+    __stack_start__ = .;
+    . += MAIN_STACK_SIZE;
+    _estack = .;
+  } >ram
 
-    /*--------------------------------------------------------------------------
-     * ISP RESERVED WINDOW (exclusive to programmer / MSS_SYS)
-     *--------------------------------------------------------------------------
-     * App never places anything here except explicitly-tagged ISP buffers.
-     * Keep NOLOAD so crt0 will not copy/clear this section.
-     */
-    .isp_buffer (NOLOAD) : ALIGN(8)
-    {
-        __isp_buffer_start__ = .;
-        KEEP(*(.isp_buffer .isp_buffer.*))
-        . = ALIGN(8);
-        __isp_buffer_end__ = .;
-    } > isp_ram
+  .stab 0 (NOLOAD) :
+  {
+    *(.stab)
+  }
 
-    __isp_buffer_size__ = SIZEOF(.isp_buffer);
-
-    /*--------------------------------------------------------------------------
-     * End markers
-     *--------------------------------------------------------------------------*/
-    __app_ram_start__ = ORIGIN(app_ram);
-    __app_ram_end__   = ORIGIN(app_ram) + LENGTH(app_ram);
-    __isp_ram_start__ = ORIGIN(isp_ram);
-    __isp_ram_end__   = ORIGIN(isp_ram) + LENGTH(isp_ram);
-
-    /* End of normal app allocations before fixed stack-top region check */
-    __app_alloc_end__ = __heap_end__;
-
-    /*--------------------------------------------------------------------------
-     * Debug / DWARF
-     *--------------------------------------------------------------------------*/
-    .stab          0 (NOLOAD) : { *(.stab) }
-    .stabstr       0 (NOLOAD) : { *(.stabstr) }
-    .debug         0 : { *(.debug) }
-    .line          0 : { *(.line) }
-    .debug_srcinfo 0 : { *(.debug_srcinfo) }
-    .debug_sfnames 0 : { *(.debug_sfnames) }
-    .debug_aranges 0 : { *(.debug_aranges) }
-    .debug_pubnames 0 : { *(.debug_pubnames) }
-    .debug_info    0 : { *(.debug_info .gnu.linkonce.wi.*) }
-    .debug_abbrev  0 : { *(.debug_abbrev) }
-    .debug_line    0 : { *(.debug_line) }
-    .debug_frame   0 : { *(.debug_frame) }
-    .debug_str     0 : { *(.debug_str) }
-    .debug_loc     0 : { *(.debug_loc) }
-    .debug_macinfo 0 : { *(.debug_macinfo) }
-
-    .note.gnu.arm.ident 0 : { KEEP(*(.note.gnu.arm.ident)) }
-    .ARM.attributes     0 : { KEEP(*(.ARM.attributes)) }
-
-    /DISCARD/ : { *(.note.GNU-stack) }
+  .stabstr 0 (NOLOAD) :
+  {
+    *(.stabstr)
+  }
+  /* DWARF debug sections.
+     Symbols in the DWARF debugging sections are relative to the beginning
+     of the section so we begin them at 0.  */
+  /* DWARF 1 */
+  .debug          0 : { *(.debug) }
+  .line           0 : { *(.line) }
+  /* GNU DWARF 1 extensions */
+  .debug_srcinfo  0 : { *(.debug_srcinfo) }
+  .debug_sfnames  0 : { *(.debug_sfnames) }
+  /* DWARF 1.1 and DWARF 2 */
+  .debug_aranges  0 : { *(.debug_aranges) }
+  .debug_pubnames 0 : { *(.debug_pubnames) }
+  /* DWARF 2 */
+  .debug_info     0 : { *(.debug_info .gnu.linkonce.wi.*) }
+  .debug_abbrev   0 : { *(.debug_abbrev) }
+  .debug_line     0 : { *(.debug_line) }
+  .debug_frame    0 : { *(.debug_frame) }
+  .debug_str      0 : { *(.debug_str) }
+  .debug_loc      0 : { *(.debug_loc) }
+  .debug_macinfo  0 : { *(.debug_macinfo) }
+  /* SGI/MIPS DWARF 2 extensions */
+  .debug_weaknames 0 : { *(.debug_weaknames) }
+  .debug_funcnames 0 : { *(.debug_funcnames) }
+  .debug_typenames 0 : { *(.debug_typenames) }
+  .debug_varnames  0 : { *(.debug_varnames) }
+  .note.gnu.arm.ident 0 : { KEEP (*(.note.gnu.arm.ident)) }
+  .ARM.attributes 0 : { KEEP (*(.ARM.attributes)) }
+  /DISCARD/ : { *(.note.GNU-stack)  }
 }
-
-/*==============================================================================
- * HARD ASSERTIONS (fail link if unsafe)
- *============================================================================*/
-
-/* Physical memory windows must not overlap */
-ASSERT((ORIGIN(app_ram) >= (ORIGIN(isp_ram) + LENGTH(isp_ram))) ||
-       ((ORIGIN(app_ram) + LENGTH(app_ram)) <= ORIGIN(isp_ram)),
-       "ERROR: app_ram overlaps isp_ram");
-
-/* App allocs (data+bss+noinit+heap) must stay below stack bottom */
-ASSERT(__app_alloc_end__ <= __stack_bottom__,
-       "ERROR: app sections/heap overlap stack");
-
-/* Stack size sanity */
-ASSERT(STACK_SIZE <= LENGTH(app_ram),
-       "ERROR: STACK_SIZE exceeds app_ram size");
-
-/* ISP section must fit entirely in isp_ram */
-ASSERT(__isp_buffer_end__ <= __isp_ram_end__,
-       "ERROR: .isp_buffer exceeds isp_ram");
-
-/* Data load image must be in ROM */
-ASSERT(__data_load__ >= ORIGIN(rom) &&
-       (__data_load__ + __data_size__) <= (ORIGIN(rom) + LENGTH(rom)),
-       "ERROR: .data load image is outside ROM");
-
-/* Vector table must be in ROM */
-ASSERT(__vector_table_start__ >= ORIGIN(rom) &&
-       __vector_table_end__ <= (ORIGIN(rom) + LENGTH(rom)),
-       "ERROR: vector table is not fully in ROM");

@@ -27,8 +27,8 @@ void copy_image_to_esram()
     volatile unsigned long *exeDestAddr, *exeSrcAddr;
 	exeDestAddr = (volatile unsigned long *)ESRAM0_REMAP_BASE_ADDR;
 	exeSrcAddr = (volatile unsigned long *)ENVM_ISPDEMO_IMAGE_STORED_ADDR;
-	/* 10960 B = 10960 KB / 4 ptr increments by 4bytes*/
-	for (ii=0; ii<2740; ii++ )
+	/* 60 KB = 60KB KB / 4 ptr increments by 4bytes*/
+	for (ii=0; ii<15360; ii++ )
 	{
 		*exeDestAddr++ = *exeSrcAddr++;
 	}
