@@ -51,7 +51,7 @@ all: demo_MSS_CM3_app.elf secondary-outputs
 demo_MSS_CM3_app.elf: $(OBJS) $(USER_OBJS)
 	@echo 'Building target: $@'
 	@echo 'Invoking: Cross ARM C Linker'
-	arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -Os -fmessage-length=0 -fsigned-char -ffunction-sections -fdata-sections  -g -T "C:\Projects\BLDS\USBFlash\sf2_isp_using_uart_interface_demo_df\libero\SoftConsole\demo_MSS_CM3_app\production-smartfusion2-execute-in-place.ld" -Xlinker --gc-sections -Wl,-Map,"demo_MSS_CM3_app.map" --specs=nano.specs -o "demo_MSS_CM3_app.elf" $(OBJS) $(USER_OBJS) $(LIBS)
+	arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -Os -fmessage-length=0 -fsigned-char -ffunction-sections -fdata-sections  -g -T "C:\Projects\BLDS\USBFlash\github\dg0454\custom\demo_MSS_CM3_app\production-smartfusion2-execute-in-place.ld" -Xlinker --gc-sections -Wl,-Map,"demo_MSS_CM3_app.map" --specs=nano.specs -o "demo_MSS_CM3_app.elf" $(OBJS) $(USER_OBJS) $(LIBS)
 	@echo 'Finished building target: $@'
 	@echo ' '
 
