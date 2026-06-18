@@ -27,12 +27,13 @@ void copy_image_to_esram()
     volatile unsigned long *exeDestAddr, *exeSrcAddr;
 	exeDestAddr = (volatile unsigned long *)ESRAM0_REMAP_BASE_ADDR;
 	exeSrcAddr = (volatile unsigned long *)ENVM_ISPDEMO_IMAGE_STORED_ADDR;
-	/* 60 KB = 60KB KB / 4 ptr increments by 4bytes*/
-	for (ii=0; ii<15360; ii++ )
+	/* 12688 B = 12688 B / 4 ptr increments by 4bytes*/
+	for (ii=0; ii<3172; ii++ )
 	{
 		*exeDestAddr++ = *exeSrcAddr++;
 	}
 }
+
 /* function to remap eSRAM to cortex - M3 code region*/
 void remap_user_code_eSRAM_0(void)
 {
@@ -42,6 +43,7 @@ void remap_user_code_eSRAM_0(void)
    ((void (*)())(*address))(); 				// pointer recast as function pointer and the dereferenced/called
    while(1){ }; 						    //This instruction never executed
 }
+
 
 int main()
 {

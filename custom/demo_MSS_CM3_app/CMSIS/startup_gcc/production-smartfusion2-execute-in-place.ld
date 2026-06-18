@@ -64,12 +64,12 @@ MEMORY
      * eSRAM. All run-time addresses (code, data, bss, stack, isp_buffer) are
      * resolved natively to this region, so they do not depend on the
      * eSRAM->0x00000000 remap. */
-    ram (rwx) : ORIGIN = 0x20000000, LENGTH = 60k
+    ram (rwx) : ORIGIN = 0x20000000, LENGTH = 48k
 }
 
 RAM_START_ADDRESS   = 0x20000000;   /* Must match MEMORY region ram ORIGIN above (run-time). */
-RAM_SIZE            = 60k;           /* Must match MEMORY region ram LENGTH above. */
-MAIN_STACK_SIZE     = 8k;            /* Cortex main stack size. */
+RAM_SIZE            = 48k;           /* Must match MEMORY region ram LENGTH above. */
+MAIN_STACK_SIZE     = 4k;            /* Cortex main stack size. */
 MIN_SIZE_HEAP       = 0k;           /* needs to be calculated for your application */
 
 /*******************************************************************************
@@ -95,7 +95,7 @@ PROVIDE (__smartfusion2_memory_remap = 0);
 
 SECTIONS
 {
-  .vector_table : ALIGN(0x10)
+  .vector_table : ALIGN(0x200)
   {
     __vector_table_load = LOADADDR(.vector_table);
     __vector_table_start = .;
@@ -103,13 +103,13 @@ SECTIONS
     KEEP(*(.isr_vector))
     . = ALIGN(0x10);
     _evector_table = .;
-  } >ram AT>rom
+  } >ram 
 
   .boot_code : ALIGN(0x10) /* When all code in NVRAM, no requirement for this section- but adds clarity when looking at .lst file */
   {
     *(.boot_code)
     . = ALIGN(0x10);
-  } >ram AT>rom
+  } >ram 
 
   .text : ALIGN(0x10)
   {
@@ -156,13 +156,13 @@ SECTIONS
     KEEP (*(SORT(.fini_array.*)))
     PROVIDE_HIDDEN (__fini_array_end = .);
     . = ALIGN(0x10);
-  } >ram AT>rom
+  } >ram 
   /* .ARM.exidx is sorted, so has to go in its own output section.  */
    __exidx_start = .;
   .ARM.exidx :
   {
     *(.ARM.exidx* .gnu.linkonce.armexidx.*)
-  } >ram AT>rom
+  } >ram 
   __exidx_end = .;
   _etext = .;
 
@@ -178,7 +178,7 @@ SECTIONS
     *(.data .data.* .gnu.linkonce.d.*)
     . = ALIGN(0x10);
     _edata = .;
-  } >ram AT>rom
+  } >ram 
 
   .bss : ALIGN(0x10)
   {
