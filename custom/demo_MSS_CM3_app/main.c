@@ -108,10 +108,19 @@ int main()
             MSS_UART_460800_BAUD,
                   MSS_UART_DATA_8_BITS | MSS_UART_NO_PARITY | MSS_UART_ONE_STOP_BIT);
 
-      MSS_SYS_init(MSS_SYS_NO_EVENT_HANDLER);
-      /* start the handshake with the host */
+//      MSS_SYS_init(MSS_SYS_NO_EVENT_HANDLER);
+//      /* start the handshake with the host */
+//
+//      while (!done) {
+        while (!done) {
+            /* fresh state for THIS operation */
+            g_src_image_target_address = 0;
+            g_bkup = 0;
+            g_file_size = 0;
+            MSS_SYS_init(MSS_SYS_NO_EVENT_HANDLER);
 
-      while (!done) {
+            g_isp_operation_busy = 1;
+
           START_HANDSHAKE:
            while(!(UART_Polled_Rx ( gp_my_uart, rx_buff, 1 )))
               ;
@@ -156,6 +165,13 @@ int main()
 
             MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"a",1);
 
+            uint32_t facc1, facc2;
+            char str_facc1[16] = {0};
+            char str_facc2[16] = {0};
+            get_sys_clock (&facc1, &facc1);
+//            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_facc1,16);
+//            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_facc2,16);
+
             switch(g_mode)
             {
             case '0':
@@ -179,8 +195,10 @@ int main()
                 MSS_SYS_start_isp(MSS_SYS_PROG_VERIFY,page_read_handler,isp_completion_handler);
                 break;
             }
+
+            while (g_isp_operation_busy) { ; }   /* block until 'p'/'q' has been sent */
       }
-      isp_host_reset_state();
+//      isp_host_reset_state();
 }
 
 
@@ -193,16 +211,14 @@ void isp_completion_handler(uint32_t value)
 {
   if (value == MSS_SYS_SUCCESS)
   {
-
 	  MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"p",1);
-
-
   }
   else
   {
 	  MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"q",1);
 	  MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )&value,8);
   }
+  g_isp_operation_busy = 0;   /* let main() proceed to next operation */
 }
 
 

@@ -4,34 +4,6 @@
  * file name : production-smartfusion2-execute-in-place.ld
  * SmartFusion2 Cortex-M3 linker script.
  *
- * MODIFIED FOR ISP DEMO (run-from-eSRAM):
- *   The application image is LOADED into eNVM (LMA at 0x00000000, so Libero
- *   accepts it into the eNVM data client and FlashPro/the bootloader can store
- *   it), but it RUNS from eSRAM (VMA at 0x20000000).
- *
- *   This is achieved with the "AT>rom" load-vs-run mechanism: .vector_table,
- *   .text and .data have their run-time addresses (VMA) in eSRAM and their
- *   load addresses (LMA) in eNVM. The C startup code copies .data from its LMA
- *   to its VMA and zero-inits .bss, exactly as for a normal "run from RAM"
- *   image.
- *
- *   WHY: Previously every section was placed at ORIGIN 0x00000000 (VMA == LMA),
- *   so the running image only worked because the boot loader remapped eSRAM to
- *   0x00000000. During an IAP/ISP PROGRAM operation the System Controller
- *   changes the eNVM/eSRAM remap state, which moved the ground under the
- *   0x0-based stack/data/code and corrupted the running application (garbage
- *   bytes on the UART, lock-up). AUTHENTICATE/VERIFY do not reprogram eNVM, so
- *   they never disturbed the remap and worked. Linking the run-time addresses
- *   natively at 0x20000000 removes that dependency so PROGRAM no longer
- *   corrupts the running code.
- *
- *   REQUIRED COMPANION CHANGES:
- *     - The boot loader must set SCB->VTOR = 0x20000000 and branch to the
- *       application reset handler at its 0x20000000 address; it must NOT rely
- *       on remapping eSRAM to 0x00000000 for the application to run.
- *     - Regenerate the eNVM .hex from this build and store it at the eNVM
- *       image address used by the boot loader.
- *
  * SVN $Revision: 7683 $
  * SVN $Date: 2015-08-21 17:06:30 +0100 (Fri, 21 Aug 2015) $
  */
@@ -60,16 +32,12 @@ MEMORY
      * eNVM data client. */
     rom (rx)  : ORIGIN = 0x00000000, LENGTH = 60k
 
-    /* VMA: image actually executes here after the boot loader copies it into
-     * eSRAM. All run-time addresses (code, data, bss, stack, isp_buffer) are
-     * resolved natively to this region, so they do not depend on the
-     * eSRAM->0x00000000 remap. */
-    ram (rwx) : ORIGIN = 0x20000000, LENGTH = 48k
+    ram (rwx) : ORIGIN = 0x20000000, LENGTH = 60k
 }
 
 RAM_START_ADDRESS   = 0x20000000;   /* Must match MEMORY region ram ORIGIN above (run-time). */
-RAM_SIZE            = 48k;           /* Must match MEMORY region ram LENGTH above. */
-MAIN_STACK_SIZE     = 4k;            /* Cortex main stack size. */
+RAM_SIZE            = 60k;           /* Must match MEMORY region ram LENGTH above. */
+MAIN_STACK_SIZE     = 8k;            /* Cortex main stack size. */
 MIN_SIZE_HEAP       = 0k;           /* needs to be calculated for your application */
 
 /*******************************************************************************
@@ -95,7 +63,7 @@ PROVIDE (__smartfusion2_memory_remap = 0);
 
 SECTIONS
 {
-  .vector_table : ALIGN(0x200)
+  .vector_table : ALIGN(0x10)
   {
     __vector_table_load = LOADADDR(.vector_table);
     __vector_table_start = .;
@@ -193,19 +161,6 @@ SECTIONS
     __end = _end;
     _ebss = .;
     PROVIDE(end = .);
-  } >ram
-
-  /*
-   * ISP page buffers (g_page_buffer, isp_page_buffer) are tagged
-   * .isp_buffer in the application source. Give them a defined home inside
-   * eSRAM. This is run-time only (not part of the loaded eNVM image).
-   */
-  .isp_buffer : ALIGN(0x10)
-  {
-    __isp_buffer_start__ = .;
-    KEEP(*(.isp_buffer .isp_buffer.*))
-    . = ALIGN(0x10);
-    __isp_buffer_end__ = .;
   } >ram
 
   .heap : ALIGN(0x10)

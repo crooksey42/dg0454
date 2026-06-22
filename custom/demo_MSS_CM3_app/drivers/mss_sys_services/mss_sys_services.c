@@ -2450,3 +2450,10 @@ static void write_array_into_ptr_value
     *pointer = (uint8_t*)var;
 }
 
+void get_sys_clock (uint32_t *facc1, uint32_t *facc2) {
+    *facc1 = SYSREG->MSSDDR_FACC1_CR;
+    *facc2 = SYSREG->MSSDDR_FACC2_CR;
+}
+
+
+
