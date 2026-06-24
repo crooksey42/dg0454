@@ -22,13 +22,8 @@
 #define BUFFER_SIZE 4096
 
 //*&************************************************************
-__attribute__((section(".isp_buffer")))
 uint8_t g_page_buffer[BUFFER_SIZE];
-
-__attribute__((section(".isp_buffer")))
-static uint8_t isp_page_buffer[1024];
-
-uint32_t page_read_handler(uint8_t const ** pp_next_page);
+uint32_t page_read_handler(/*uint8_t const ** pp_next_page*/);
 void isp_completion_handler(uint32_t value);
 //dummy
 void dummy_isp_completion_handler(uint32_t value);
@@ -46,7 +41,14 @@ static uint32_t g_src_image_target_address = 0;
 uint32_t g_bkup = 0;
 uint8_t g_mode = 0;
 static uint32_t g_file_size = 0;
+
 //***********************************************************
+
+static uint32_t read_page_from_host_through_uart
+(
+    uint8_t * g_buffer,
+    uint32_t length
+);
 
 void delay(volatile uint8_t n)
 {
@@ -77,25 +79,16 @@ UART_Polled_Rx
     return rx_size;
 }
 
-static void isp_host_reset_state(void)
+uint8_t MSS_SYS_start_isp_custom
+(
+    uint8_t mode,
+    comblk_page_handler_t page_read_handler,
+    sys_serv_isp_complete_handler_t isp_completion_handler
+)
 {
-    uint8_t dummy;
+    uint8_t status = MSS_SYS_SUCCESS;
 
-    /* Reset host transfer state */
-    g_src_image_target_address = 0;
-    g_bkup = 0;
-
-    /* Reset file size */
-    g_file_size = 0;
-
-    /* Flush any pending UART RX garbage */
-    while (UART_Polled_Rx(gp_my_uart, &dummy, 1))
-    {
-        /* discard */
-    }
-
-    /* Re-init SYS ISP state machine safely */
-    MSS_SYS_init(MSS_SYS_NO_EVENT_HANDLER);
+    return status;
 }
 
 int main()
@@ -108,10 +101,6 @@ int main()
             MSS_UART_460800_BAUD,
                   MSS_UART_DATA_8_BITS | MSS_UART_NO_PARITY | MSS_UART_ONE_STOP_BIT);
 
-//      MSS_SYS_init(MSS_SYS_NO_EVENT_HANDLER);
-//      /* start the handshake with the host */
-//
-//      while (!done) {
         while (!done) {
             /* fresh state for THIS operation */
             g_src_image_target_address = 0;
@@ -163,42 +152,45 @@ int main()
                           ;
             g_file_size = atoi((const char*)rx_buff);
 
+            uint32_t facc1, facc2, envm_cr, device_version;
+            uint8_t str_facc1[16] = {0};
+            uint8_t str_facc2[16] = {0};
+            uint8_t str_envm_cr[16] = {0};
+            uint8_t str_device_version[16] = {0};
+
+            snprintf(str_facc1, 16, "%lu", (unsigned long)facc1);
+            snprintf(str_facc2, 16, "%lu", (unsigned long)facc2);
+            snprintf(str_envm_cr, 16, "%lu", (unsigned long)envm_cr);
+            snprintf(str_device_version, 16, "%lu", (unsigned long)str_device_version);
+
+            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )rx_buff,8);
+            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_facc1,16);
+            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_facc2,16);
+            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_envm_cr,16);
+            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_device_version,16);
+
+
             MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"a",1);
 
-            uint32_t facc1, facc2;
-            char str_facc1[16] = {0};
-            char str_facc2[16] = {0};
-            get_sys_clock (&facc1, &facc1);
-//            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_facc1,16);
-//            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_facc2,16);
+            uint32_t length = 0;
 
             switch(g_mode)
             {
             case '0':
-                MSS_SYS_start_isp(MSS_SYS_PROG_AUTHENTICATE,page_read_handler,isp_completion_handler);
+
+                MSS_SYS_start_isp_custom(MSS_SYS_PROG_AUTHENTICATE,page_read_handler,isp_completion_handler);
                 break;
             case '1':
-                MSS_SYS_start_isp(MSS_SYS_PROG_PROGRAM,page_read_handler,isp_completion_handler);
+                MSS_SYS_start_isp_custom(MSS_SYS_PROG_PROGRAM,page_read_handler,isp_completion_handler);
                 break;
             case '2':
-                //dummy program
-                //g_isp_operation_busy = 1;
-                /*
-                MSS_SYS_start_isp(MSS_SYS_PROG_PROGRAM,dummy_page_read_handler,dummy_isp_completion_handler);
-                while(g_isp_operation_busy)
-                {
-                    ;//wait
-                }
-                delay(100000);
-                */
                 MSS_SYS_init(MSS_SYS_NO_EVENT_HANDLER);
-                MSS_SYS_start_isp(MSS_SYS_PROG_VERIFY,page_read_handler,isp_completion_handler);
+                MSS_SYS_start_isp_custom(MSS_SYS_PROG_VERIFY,page_read_handler,isp_completion_handler);
                 break;
             }
 
             while (g_isp_operation_busy) { ; }   /* block until 'p'/'q' has been sent */
       }
-//      isp_host_reset_state();
 }
 
 
@@ -236,7 +228,7 @@ static uint32_t read_page_from_host_through_uart
     uint32_t num_bytes,factor,temp;
 
     num_bytes = length;
-    char crc;
+    uint8_t crc;
     size_t rx_size = 0;
    	uint8_t rx_buff[1];
     //Write Ack "b" to indicate beginning of the transaction from the target
@@ -283,8 +275,11 @@ static uint32_t read_page_from_host_through_uart
     //send Ack message to indicate one transaction is done
     MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"a",1);
     //Recive 1-byte CRC for data of size num_bytes
-    while(!(UART_Polled_Rx ( gp_my_uart, rx_buff, 1 )))
-                ;
+    while(!(UART_Polled_Rx ( gp_my_uart, rx_buff, 1 )));
+
+    // send back received crc
+    MSS_UART_polled_tx( gp_my_uart,(const uint8_t * )rx_buff, 1 );
+
     factor = 1;
     crc = 0;
     while((num_bytes-1)/factor)
@@ -292,30 +287,29 @@ static uint32_t read_page_from_host_through_uart
       crc = crc^g_buffer[factor];
       factor = factor*2;
     }
-    if(crc == (char)rx_buff[0])
+
+    if(crc == rx_buff[0])
     {
        g_src_image_target_address += rx_size;
        g_bkup = g_bkup + rx_size;
-       MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"a",1);
     }
     else
     {
        MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"n",1);
        goto CRCFAIL;
     }
-
     return rx_size;
 }
 /* function called by COMM_BLK for input data bit stream*/
 uint32_t page_read_handler
 (
-    uint8_t const ** pp_next_page
+    //uint8_t const ** pp_next_page
 )
 {
     uint32_t length;
 
     length = read_page_from_host_through_uart(g_page_buffer, BUFFER_SIZE);
-    *pp_next_page = g_page_buffer;
+    //*pp_next_page = g_page_buffer;
 
     return length;
 }
