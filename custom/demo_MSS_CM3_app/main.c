@@ -18,12 +18,16 @@
 #include <stdbool.h>
 #include "drivers/mss_uart/mss_uart.h"
 #include "drivers/mss_sys_services/mss_sys_services.h"
+#include "drivers/mss_nvm/mss_nvm.h"
+
+/* NVM base address – eNVM starts at 0x60000000 on SmartFusion2 */
+#define NVM_BASE_ADDRESS  (0x60000000u)
 
 #define BUFFER_SIZE 4096
 
 //*&************************************************************
 uint8_t g_page_buffer[BUFFER_SIZE];
-uint32_t page_read_handler(/*uint8_t const ** pp_next_page*/);
+uint32_t page_read_handler(uint8_t const ** pp_next_page);
 void isp_completion_handler(uint32_t value);
 //dummy
 void dummy_isp_completion_handler(uint32_t value);
@@ -140,24 +144,6 @@ int main()
                           ;
             g_file_size = atoi((const char*)rx_buff);
 
-            uint32_t facc1, facc2, envm_cr, device_version;
-            uint8_t str_facc1[16] = {0};
-            uint8_t str_facc2[16] = {0};
-            uint8_t str_envm_cr[16] = {0};
-            uint8_t str_device_version[16] = {0};
-
-            snprintf(str_facc1, 16, "%lu", (unsigned long)facc1);
-            snprintf(str_facc2, 16, "%lu", (unsigned long)facc2);
-            snprintf(str_envm_cr, 16, "%lu", (unsigned long)envm_cr);
-            snprintf(str_device_version, 16, "%lu", (unsigned long)str_device_version);
-
-            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )rx_buff,8);
-            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_facc1,16);
-            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_facc2,16);
-            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_envm_cr,16);
-            MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )str_device_version,16);
-
-
             MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"a",1);
 
             uint32_t length = 0;
@@ -175,6 +161,61 @@ int main()
                 MSS_SYS_init(MSS_SYS_NO_EVENT_HANDLER);
                 MSS_SYS_start_isp(MSS_SYS_PROG_VERIFY,page_read_handler,isp_completion_handler);
                 break;
+            case '3':
+                {
+                    /*----------------------------------------------------------
+                     * Mode 3: direct NVM write.
+                     *
+                     * Receive the file from the client in BUFFER_SIZE chunks
+                     * using the existing page-read protocol and copy each chunk
+                     * directly into eNVM starting at NVM_BASE_ADDRESS
+                     * (0x60000000).
+                     *
+                     * eNVM on SmartFusion2 is memory-mapped and word-writable;
+                     * we write 32-bit words for efficiency and handle any
+                     * trailing bytes individually.
+                     *----------------------------------------------------------*/
+                    uint32_t nvm_write_addr = 0x60000000u;
+                    uint32_t bytes_received = 0;
+                    nvm_status_t nvm_result = NVM_SUCCESS;
+
+                    g_src_image_target_address = 0;
+                    g_bkup = 0;
+
+                    do {
+                        bytes_received = read_page_from_host_through_uart(
+                                             g_page_buffer, BUFFER_SIZE);
+                        if (bytes_received == 0u) { break; }
+
+                        nvm_result = NVM_write(nvm_write_addr,
+                                               g_page_buffer,
+                                               bytes_received,
+                                               NVM_DO_NOT_LOCK_PAGE);
+
+                        if ((NVM_SUCCESS != nvm_result) &&
+                            (NVM_WRITE_THRESHOLD_WARNING != nvm_result))
+                        {
+                            break;   /* write failed – abort */
+                        }
+
+                        nvm_write_addr += bytes_received;
+
+                    } while (bytes_received == BUFFER_SIZE);
+
+                    if ((NVM_SUCCESS == nvm_result) ||
+                        (NVM_WRITE_THRESHOLD_WARNING == nvm_result))
+                    {
+                        MSS_UART_polled_tx(gp_my_uart, (const uint8_t *)"p", 1);
+                    }
+                    else
+                    {
+                        MSS_UART_polled_tx(gp_my_uart, (const uint8_t *)"q", 1);
+                    }
+
+                    g_isp_operation_busy = 0;
+                    break;
+                }
+
             }
 
             while (g_isp_operation_busy) { ; }   /* block until 'p'/'q' has been sent */
@@ -216,7 +257,7 @@ static uint32_t read_page_from_host_through_uart
     uint32_t num_bytes,factor,temp;
 
     num_bytes = length;
-    uint8_t crc;
+    char crc;
     size_t rx_size = 0;
    	uint8_t rx_buff[1];
     //Write Ack "b" to indicate beginning of the transaction from the target
@@ -263,11 +304,8 @@ static uint32_t read_page_from_host_through_uart
     //send Ack message to indicate one transaction is done
     MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"a",1);
     //Recive 1-byte CRC for data of size num_bytes
-    while(!(UART_Polled_Rx ( gp_my_uart, rx_buff, 1 )));
-
-    // send back received crc
-    MSS_UART_polled_tx( gp_my_uart,(const uint8_t * )rx_buff, 1 );
-
+    while(!(UART_Polled_Rx ( gp_my_uart, rx_buff, 1 )))
+                ;
     factor = 1;
     crc = 0;
     while((num_bytes-1)/factor)
@@ -276,28 +314,30 @@ static uint32_t read_page_from_host_through_uart
       factor = factor*2;
     }
 
-    if(crc == rx_buff[0])
+    if(crc == (char)rx_buff[0])
     {
        g_src_image_target_address += rx_size;
        g_bkup = g_bkup + rx_size;
+       MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"a",1);
     }
     else
     {
        MSS_UART_polled_tx(gp_my_uart,(const uint8_t * )"n",1);
        goto CRCFAIL;
     }
+
     return rx_size;
 }
 /* function called by COMM_BLK for input data bit stream*/
 uint32_t page_read_handler
 (
-    //uint8_t const ** pp_next_page
+    uint8_t const ** pp_next_page
 )
 {
     uint32_t length;
 
     length = read_page_from_host_through_uart(g_page_buffer, BUFFER_SIZE);
-    //*pp_next_page = g_page_buffer;
+    *pp_next_page = g_page_buffer;
 
     return length;
 }
