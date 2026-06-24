@@ -49,7 +49,7 @@ int main()
 {
 		/* Initialization all necessary hardware components */
 	    MSS_UART_init( gp_my_uart,
-	            MSS_UART_57600_BAUD,
+	            MSS_UART_460800_BAUD,
 	                      MSS_UART_DATA_8_BITS | MSS_UART_NO_PARITY | MSS_UART_ONE_STOP_BIT);
 	    MSS_UART_polled_tx_string(gp_my_uart,(uint8_t *)"\n\r\n\r*** SmartFusion2 ISP Demo ***\n\r");
 		MSS_UART_polled_tx_string(gp_my_uart,(uint8_t *)"\n\rRemmaping the main application code to eSRAM_0 \n\r");
