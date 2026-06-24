@@ -2493,8 +2493,6 @@ uint8_t MSS_SYS_initiate_IAP
     uint32_t bitstream_spi_addr
 );
 
-void get_sys_clock (uint32_t *facc1, uint32_t *facc2);
-
 #ifdef __cplusplus
 }
 #endif

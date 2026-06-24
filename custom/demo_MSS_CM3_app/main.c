@@ -79,18 +79,6 @@ UART_Polled_Rx
     return rx_size;
 }
 
-uint8_t MSS_SYS_start_isp_custom
-(
-    uint8_t mode,
-    comblk_page_handler_t page_read_handler,
-    sys_serv_isp_complete_handler_t isp_completion_handler
-)
-{
-    uint8_t status = MSS_SYS_SUCCESS;
-
-    return status;
-}
-
 int main()
 {
 
@@ -178,14 +166,14 @@ int main()
             {
             case '0':
 
-                MSS_SYS_start_isp_custom(MSS_SYS_PROG_AUTHENTICATE,page_read_handler,isp_completion_handler);
+                MSS_SYS_start_isp(MSS_SYS_PROG_AUTHENTICATE,page_read_handler,isp_completion_handler);
                 break;
             case '1':
-                MSS_SYS_start_isp_custom(MSS_SYS_PROG_PROGRAM,page_read_handler,isp_completion_handler);
+                MSS_SYS_start_isp(MSS_SYS_PROG_PROGRAM,page_read_handler,isp_completion_handler);
                 break;
             case '2':
                 MSS_SYS_init(MSS_SYS_NO_EVENT_HANDLER);
-                MSS_SYS_start_isp_custom(MSS_SYS_PROG_VERIFY,page_read_handler,isp_completion_handler);
+                MSS_SYS_start_isp(MSS_SYS_PROG_VERIFY,page_read_handler,isp_completion_handler);
                 break;
             }
 
